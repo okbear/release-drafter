@@ -1,0 +1,20 @@
+fragment AdapterComparisonCommitFields on Commit {
+  id
+  oid
+  committedDate
+  message
+  author {
+    name
+    user {
+      login
+    }
+  }
+  authors(first: 100) {
+    nodes {
+      name
+      user {
+        login
+      }
+    }
+  }
+}

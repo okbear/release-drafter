@@ -974,6 +974,18 @@ of the included pull requests matches a configured `api/user` label condition:
 Drafter and Check PR return labels as JSON arrays. The Autolabeler action's
 existing `labels` output remains a comma-separated list of matched labels.
 
+## Stacked pull requests
+
+Merging a stack of pull requests with a merge commit creates a single commit
+for the whole stack, and GitHub associates that commit only with the bottom
+pull request. Release Drafter reads the stack of each pull request it finds and
+also lists the other merged pull requests that share the commit.
+
+Right after a merge, GitHub may not yet associate the commit with any pull
+request. Release Drafter then finds only the pull requests among the most
+recently updated ones, so part of a large stack can be missing until the next
+run.
+
 ## GitHub Enterprise Server (GHES)
 
 The GitHub Actions runtime creates the GitHub client through the GitHub adapter.
@@ -982,6 +994,10 @@ It passes the action token and the runtime
 GitHub adapter. If the GitHub Enterprise Server instance supports the required
 REST and GraphQL APIs, the same workflow can target it without
 `github.com`-specific configuration.
+
+GitHub Enterprise Server does not have stacked pull requests yet. When the
+GraphQL API rejects the `stack` field, Release Drafter repeats the request
+without it and lists pull requests as it did before.
 
 ## Adopters
 

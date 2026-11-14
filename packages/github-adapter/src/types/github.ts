@@ -37,6 +37,7 @@ export type GraphPullRequest = {
   labels?: { nodes?: Array<{ name?: string | null } | null> | null } | null
   merged?: boolean
   mergeCommit?: { oid?: string | null } | null
+  stack?: { id: string } | null
 }
 
 export type GraphCommit = {

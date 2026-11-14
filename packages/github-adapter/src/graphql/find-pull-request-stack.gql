@@ -1,0 +1,32 @@
+query findPullRequestStack(
+  $name: String!
+  $owner: String!
+  $number: Int!
+  $cursor: String
+  $limit: Int!
+  $withPullRequestBody: Boolean!
+  $withPullRequestURL: Boolean!
+  $withBaseRefName: Boolean!
+  $withHeadRefName: Boolean!
+) {
+  repository(name: $name, owner: $owner) {
+    pullRequest(number: $number) {
+      stack {
+        entries(last: $limit, before: $cursor) {
+          pageInfo {
+            hasPreviousPage
+            startCursor
+          }
+          nodes {
+            pullRequest {
+              ...AdapterPullRequestFields
+              mergeCommit {
+                oid
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

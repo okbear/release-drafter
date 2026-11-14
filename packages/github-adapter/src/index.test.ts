@@ -1,4 +1,8 @@
-import type { FindChangesRequest, Repository } from '@release-drafter/core'
+import {
+  type FindChangesRequest,
+  noopLogger,
+  type Repository,
+} from '@release-drafter/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { GitHubAdapter, type GitHubOctokit } from './index.ts'
 
@@ -463,6 +467,325 @@ describe('GitHubAdapter', () => {
       expect.objectContaining({ cursor: null, limit: 5 }),
     )
     expect(octokit.graphql).toHaveBeenCalledTimes(2)
+  })
+
+  describe('stacked pull requests', () => {
+    const nameWithOwner = `${repository.owner}/${repository.name}`
+    const stackMember = (number: number) => ({
+      number,
+      title: `Pull request ${number}`,
+      merged: true,
+      baseRepository: { nameWithOwner },
+      stack: { id: 'stack' },
+    })
+    const stackEntry = (number: number, oid: string | null) => ({
+      pullRequest: {
+        number,
+        title: `Pull request ${number}`,
+        merged: oid !== null,
+        baseRepository: { nameWithOwner },
+        mergeCommit: oid === null ? null : { oid },
+      },
+    })
+    const stackPage = (entries: unknown[], startCursor?: string) => ({
+      repository: {
+        pullRequest: {
+          stack: {
+            entries: {
+              pageInfo: {
+                hasPreviousPage: startCursor !== undefined,
+                startCursor: startCursor ?? null,
+              },
+              nodes: entries,
+            },
+          },
+        },
+      },
+    })
+
+    it('lists every pull request of a stack merged with one merge commit', async () => {
+      const octokit = mockOctokit()
+      comparisonWithPullRequests(octokit, [stackMember(1)])
+      vi.mocked(octokit.graphql).mockResolvedValueOnce(
+        stackPage([
+          stackEntry(1, 'commit'),
+          stackEntry(2, 'commit'),
+          stackEntry(3, 'commit'),
+        ]),
+      )
+
+      const result = await adapter(octokit).findChanges(changesRequest())
+
+      expect(result.pullRequests.map(({ number }) => number)).toEqual([1, 2, 3])
+      expect(octokit.graphql).toHaveBeenNthCalledWith(
+        1,
+        expect.stringContaining('query hydrateComparisonCommitsWithStacks('),
+        expect.anything(),
+      )
+      expect(octokit.graphql).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('query findPullRequestStack('),
+        expect.objectContaining({ number: 1, cursor: null, limit: 100 }),
+      )
+      expect(octokit.graphql).toHaveBeenCalledTimes(2)
+    })
+
+    it('skips stack entries that are unmerged, outside the comparison, or already found', async () => {
+      const octokit = mockOctokit()
+      comparisonWithPullRequests(octokit, [stackMember(1)])
+      vi.mocked(octokit.graphql).mockResolvedValueOnce(
+        stackPage([
+          stackEntry(1, 'commit'),
+          stackEntry(2, 'earlier-commit'),
+          stackEntry(3, null),
+          { pullRequest: null },
+          null,
+        ]),
+      )
+
+      const result = await adapter(octokit).findChanges(changesRequest())
+
+      expect(result.pullRequests.map(({ number }) => number)).toEqual([1])
+    })
+
+    it('reads every page of a stack and keeps its order', async () => {
+      const octokit = mockOctokit()
+      comparisonWithPullRequests(octokit, [stackMember(1)])
+      vi.mocked(octokit.graphql)
+        .mockResolvedValueOnce(stackPage([stackEntry(3, 'commit')], 'cursor'))
+        .mockResolvedValueOnce(stackPage([stackEntry(2, 'commit')]))
+
+      const result = await adapter(octokit).findChanges(changesRequest())
+
+      expect(result.pullRequests.map(({ number }) => number)).toEqual([1, 2, 3])
+      expect(octokit.graphql).toHaveBeenNthCalledWith(
+        3,
+        expect.stringContaining('query findPullRequestStack('),
+        expect.objectContaining({ number: 1, cursor: 'cursor' }),
+      )
+      expect(octokit.graphql).toHaveBeenCalledTimes(3)
+    })
+
+    it('reads a stack once when several found pull requests belong to it', async () => {
+      const octokit = mockOctokit()
+      comparisonWithPullRequests(octokit, [stackMember(1), stackMember(2)])
+      vi.mocked(octokit.graphql).mockResolvedValueOnce(
+        stackPage([
+          stackEntry(1, 'commit'),
+          stackEntry(2, 'commit'),
+          stackEntry(3, 'commit'),
+        ]),
+      )
+
+      const result = await adapter(octokit).findChanges(changesRequest())
+
+      expect(result.pullRequests.map(({ number }) => number)).toEqual([1, 2, 3])
+      expect(octokit.graphql).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not read the stack of a pull request from another repository', async () => {
+      const octokit = mockOctokit()
+      comparisonWithPullRequests(octokit, [
+        {
+          ...stackMember(1),
+          baseRepository: { nameWithOwner: 'another/repository' },
+        },
+      ])
+
+      const result = await adapter(octokit).findChanges(changesRequest())
+
+      expect(result.pullRequests).toEqual([])
+      expect(octokit.graphql).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps the found pull requests when the stack is no longer available', async () => {
+      const octokit = mockOctokit()
+      comparisonWithPullRequests(octokit, [stackMember(1)])
+      vi.mocked(octokit.graphql).mockResolvedValueOnce({
+        repository: { pullRequest: null },
+      })
+
+      const result = await adapter(octokit).findChanges(changesRequest())
+
+      expect(result.pullRequests.map(({ number }) => number)).toEqual([1])
+    })
+
+    it('keeps the found pull requests and warns when the stack cannot be read', async () => {
+      const octokit = mockOctokit()
+      const logger = { ...noopLogger, warning: vi.fn() }
+      comparisonWithPullRequests(octokit, [stackMember(1)])
+      vi.mocked(octokit.graphql).mockRejectedValueOnce(new Error('timeout'))
+
+      const result = await new GitHubAdapter({
+        token: 'token',
+        octokit,
+        logger,
+      }).findChanges(changesRequest())
+
+      expect(result.pullRequests.map(({ number }) => number)).toEqual([1])
+      expect(logger.warning).toHaveBeenCalledWith(
+        expect.stringMatching(/stack of pull request #1\..*timeout/),
+      )
+    })
+
+    it('stops reading a stack when the cursor does not move', async () => {
+      const octokit = mockOctokit()
+      comparisonWithPullRequests(octokit, [stackMember(1)])
+      vi.mocked(octokit.graphql).mockResolvedValue(
+        stackPage([stackEntry(2, 'commit')], 'cursor'),
+      )
+
+      const result = await adapter(octokit).findChanges(changesRequest())
+
+      expect(result.pullRequests.map(({ number }) => number)).toEqual([1, 2])
+      expect(octokit.graphql).toHaveBeenCalledTimes(3)
+    })
+
+    it('lists a stacked pull request once when the recent pull requests also contain it', async () => {
+      const octokit = mockOctokit()
+      comparisonWithPullRequests(octokit, [stackMember(1)])
+      vi.mocked(octokit.graphql)
+        .mockResolvedValueOnce(
+          stackPage([stackEntry(1, 'commit'), stackEntry(2, 'commit')]),
+        )
+        .mockResolvedValueOnce({
+          repository: {
+            pullRequests: {
+              pageInfo: { hasNextPage: false },
+              nodes: [stackEntry(2, 'commit').pullRequest],
+            },
+          },
+        })
+
+      const result = await adapter(octokit).findChanges(
+        changesRequest({ comparison: { baseRef: 'v1', headRef: 'main' } }),
+      )
+
+      expect(result.pullRequests.map(({ number }) => number)).toEqual([1, 2])
+      expect(octokit.graphql).toHaveBeenCalledTimes(3)
+    })
+
+    it('loads the changed files of stacked pull requests', async () => {
+      const octokit = mockOctokit()
+      comparisonWithPullRequests(octokit, [stackMember(1)])
+      vi.mocked(octokit.graphql)
+        .mockResolvedValueOnce(
+          stackPage([stackEntry(1, 'commit'), stackEntry(2, 'commit')]),
+        )
+        .mockResolvedValue({
+          repository: {
+            pullRequest: {
+              files: {
+                nodes: [{ path: 'src/a.ts' }],
+                pageInfo: { hasNextPage: false },
+              },
+            },
+          },
+        })
+
+      const result = await adapter(octokit).findChanges(
+        changesRequest({ includeChangedFiles: true }),
+      )
+
+      expect(
+        result.pullRequests.map(({ number, changedFiles }) => [
+          number,
+          changedFiles,
+        ]),
+      ).toEqual([
+        [1, ['src/a.ts']],
+        [2, ['src/a.ts']],
+      ])
+    })
+
+    describe('on a server without stacked pull requests', () => {
+      const hydratePage = {
+        repository: {
+          object: {
+            __typename: 'Commit',
+            history: {
+              pageInfo: { hasNextPage: false },
+              nodes: [{ oid: 'commit', associatedPullRequests: { nodes: [] } }],
+            },
+          },
+        },
+      }
+      const graphqlError = (errors: unknown[]) =>
+        Object.assign(
+          new Error('Request failed due to following response errors'),
+          {
+            errors,
+          },
+        )
+      const mockComparison = (octokit: GitHubOctokit) => {
+        comparisonWithPullRequests(octokit, [])
+        vi.mocked(octokit.graphql).mockReset()
+      }
+
+      it.each([
+        {
+          error: 'a validation error',
+          errors: [
+            {
+              message: "Field 'stack' doesn't exist on type 'PullRequest'",
+              extensions: { code: 'undefinedField', fieldName: 'stack' },
+            },
+          ],
+        },
+        {
+          error: 'a field error',
+          errors: [
+            {
+              message: 'Resource not accessible by integration',
+              path: ['repository', 'object', 'history', 'nodes', 0, 'stack'],
+            },
+          ],
+        },
+      ])(
+        'repeats the request without stacks after $error and remembers it',
+        async ({ errors }) => {
+          const octokit = mockOctokit()
+          const logger = { ...noopLogger, info: vi.fn() }
+          const github = new GitHubAdapter({ token: 'token', octokit, logger })
+          mockComparison(octokit)
+          vi.mocked(octokit.graphql)
+            .mockRejectedValueOnce(graphqlError(errors))
+            .mockResolvedValue(hydratePage)
+
+          await github.findChanges(changesRequest())
+          mockComparison(octokit)
+          vi.mocked(octokit.graphql).mockResolvedValue(hydratePage)
+          await github.findChanges(changesRequest())
+
+          expect(logger.info).toHaveBeenCalledTimes(1)
+          expect(octokit.graphql).toHaveBeenCalledTimes(1)
+          expect(octokit.graphql).toHaveBeenCalledWith(
+            expect.stringContaining('query hydrateComparisonCommits('),
+            expect.anything(),
+          )
+        },
+      )
+
+      it.each([
+        {
+          error: 'another field',
+          failure: graphqlError([
+            { message: 'Something went wrong', path: ['repository', 'object'] },
+            { message: 'Stack failed', path: ['repository', 'stack'] },
+          ]),
+        },
+        { error: 'the transport', failure: new Error('socket hang up') },
+      ])('fails on an error about $error', async ({ failure }) => {
+        const octokit = mockOctokit()
+        mockComparison(octokit)
+        vi.mocked(octokit.graphql).mockRejectedValueOnce(failure)
+
+        await expect(
+          adapter(octokit).findChanges(changesRequest()),
+        ).rejects.toBe(failure)
+        expect(octokit.graphql).toHaveBeenCalledTimes(1)
+      })
+    })
   })
 
   it('paginates changed files through GraphQL without REST file calls', async () => {

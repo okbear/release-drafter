@@ -5,6 +5,7 @@ import nock from 'nock'
 type Query =
   | 'query findCommitsInComparison'
   | 'query findRecentMergedPullRequests'
+  | 'query findPullRequestStack('
 
 /**
  * Available files in fixtures/graphql
@@ -32,6 +33,8 @@ type Payload =
   | 'graphql-comparison-missing-pr-with-paths'
   | 'graphql-recent-merged-prs'
   | 'graphql-recent-merged-prs-with-paths'
+  | 'graphql-comparison-stacked-prs'
+  | 'graphql-pull-request-stack'
 
 export const getGqlPayload = (payload: Payload) =>
   JSON.parse(
@@ -164,8 +167,13 @@ export const mockGraphqlQuery = (
         }
       }
       scope = scope
-        .post('/graphql', (body) =>
-          body.query.includes(param.query || defaultQuery),
+        .post(
+          '/graphql',
+          (body) =>
+            body.query.includes(param.query || defaultQuery) &&
+            Object.entries(param.variables || {}).every(
+              ([key, value]) => body.variables?.[key] === value,
+            ),
         )
         .reply(200, response)
     }

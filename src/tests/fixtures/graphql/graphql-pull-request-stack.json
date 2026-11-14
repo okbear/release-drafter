@@ -1,0 +1,99 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "stack": {
+          "entries": {
+            "pageInfo": {
+              "hasPreviousPage": false,
+              "startCursor": "MQ"
+            },
+            "nodes": [
+              {
+                "pullRequest": {
+                  "title": "Add the database table",
+                  "number": 10,
+                  "url": "https://github.com/toolmantim/release-drafter-test-project/pull/10",
+                  "body": "",
+                  "author": {
+                    "login": "TimonVS",
+                    "__typename": "User",
+                    "url": "https://github.com/TimonVS"
+                  },
+                  "baseRepository": {
+                    "nameWithOwner": "toolmantim/release-drafter-test-project"
+                  },
+                  "mergedAt": "2019-04-27T15:00:00Z",
+                  "isCrossRepository": false,
+                  "labels": {
+                    "nodes": []
+                  },
+                  "merged": true,
+                  "baseRefName": "master",
+                  "headRefName": "stack-table",
+                  "mergeCommit": {
+                    "oid": "c0ffee1234567890c0ffee1234567890c0ffee12"
+                  }
+                }
+              },
+              {
+                "pullRequest": {
+                  "title": "Add the API",
+                  "number": 11,
+                  "url": "https://github.com/toolmantim/release-drafter-test-project/pull/11",
+                  "body": "",
+                  "author": {
+                    "login": "TimonVS",
+                    "__typename": "User",
+                    "url": "https://github.com/TimonVS"
+                  },
+                  "baseRepository": {
+                    "nameWithOwner": "toolmantim/release-drafter-test-project"
+                  },
+                  "mergedAt": "2019-04-27T15:00:00Z",
+                  "isCrossRepository": false,
+                  "labels": {
+                    "nodes": []
+                  },
+                  "merged": true,
+                  "baseRefName": "stack-table",
+                  "headRefName": "stack-api",
+                  "mergeCommit": {
+                    "oid": "c0ffee1234567890c0ffee1234567890c0ffee12"
+                  }
+                }
+              },
+              {
+                "pullRequest": {
+                  "title": "Add the screen",
+                  "number": 12,
+                  "url": "https://github.com/toolmantim/release-drafter-test-project/pull/12",
+                  "body": "",
+                  "author": {
+                    "login": "TimonVS",
+                    "__typename": "User",
+                    "url": "https://github.com/TimonVS"
+                  },
+                  "baseRepository": {
+                    "nameWithOwner": "toolmantim/release-drafter-test-project"
+                  },
+                  "mergedAt": "2019-04-27T15:00:00Z",
+                  "isCrossRepository": false,
+                  "labels": {
+                    "nodes": []
+                  },
+                  "merged": true,
+                  "baseRefName": "stack-api",
+                  "headRefName": "stack-screen",
+                  "mergeCommit": {
+                    "oid": "c0ffee1234567890c0ffee1234567890c0ffee12"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

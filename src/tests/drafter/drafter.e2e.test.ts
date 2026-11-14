@@ -1096,4 +1096,47 @@ describe('drafter e2e', () => {
       expect(mocks.core.setFailed).not.toHaveBeenCalled()
     })
   })
+
+  describe('stacked pull requests', () => {
+    it('lists every pull request of a stack merged with one merge commit', async () => {
+      await mockContext('push')
+      mocks.config.mockReturnValue('config')
+
+      const gqlScope = mockGraphqlQuery([
+        { payload: 'graphql-comparison-stacked-prs' },
+        {
+          query: 'query findPullRequestStack(',
+          payload: 'graphql-pull-request-stack',
+          variables: { number: 10 },
+        },
+      ])
+
+      const scope = nockGetAndPostReleases({ fetchedReleases: ['release'] })
+
+      await runDrafter()
+
+      expect(mocks.postReleaseBody.mock.lastCall).toMatchInlineSnapshot(`
+        [
+          {
+            "body": "# What's Changed
+
+        * Add the database table (#10) @TimonVS
+        * Add the API (#11) @TimonVS
+        * Add the screen (#12) @TimonVS
+        ",
+            "draft": true,
+            "make_latest": "true",
+            "name": "",
+            "prerelease": false,
+            "tag_name": "",
+            "target_commitish": "master",
+          },
+        ]
+      `)
+
+      expect(scope.isDone()).toBe(true)
+      expect(gqlScope.pendingMocks().length).toBe(0)
+      expect(mocks.core.setFailed).not.toHaveBeenCalled()
+    })
+  })
 })

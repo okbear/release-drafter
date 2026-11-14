@@ -34665,6 +34665,28 @@ var TypedDocumentString = class extends String {
 		return this.value;
 	}
 };
+var AdapterComparisonCommitFieldsFragmentDoc = new TypedDocumentString(`
+    fragment AdapterComparisonCommitFields on Commit {
+  id
+  oid
+  committedDate
+  message
+  author {
+    name
+    user {
+      login
+    }
+  }
+  authors(first: 100) {
+    nodes {
+      name
+      user {
+        login
+      }
+    }
+  }
+}
+    `, { "fragmentName": "AdapterComparisonCommitFields" });
 var AdapterPullRequestFieldsFragmentDoc = new TypedDocumentString(`
     fragment AdapterPullRequestFields on PullRequest {
   title
@@ -34708,6 +34730,53 @@ var FindPullRequestChangedFilesDocument = new TypedDocumentString(`
   }
 }
     `);
+var FindPullRequestStackDocument = new TypedDocumentString(`
+    query findPullRequestStack($name: String!, $owner: String!, $number: Int!, $cursor: String, $limit: Int!, $withPullRequestBody: Boolean!, $withPullRequestURL: Boolean!, $withBaseRefName: Boolean!, $withHeadRefName: Boolean!) {
+  repository(name: $name, owner: $owner) {
+    pullRequest(number: $number) {
+      stack {
+        entries(last: $limit, before: $cursor) {
+          pageInfo {
+            hasPreviousPage
+            startCursor
+          }
+          nodes {
+            pullRequest {
+              ...AdapterPullRequestFields
+              mergeCommit {
+                oid
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+    fragment AdapterPullRequestFields on PullRequest {
+  title
+  number
+  url @include(if: $withPullRequestURL)
+  body @include(if: $withPullRequestBody)
+  author {
+    __typename
+    login
+    url
+  }
+  baseRepository {
+    nameWithOwner
+  }
+  isCrossRepository
+  mergedAt
+  labels(first: 100) {
+    nodes {
+      name
+    }
+  }
+  merged
+  baseRefName @include(if: $withBaseRefName)
+  headRefName @include(if: $withHeadRefName)
+}`);
 var FindRecentMergedPullRequestsDocument = new TypedDocumentString(`
     query findRecentMergedPullRequests($name: String!, $owner: String!, $baseRefName: String, $cursor: String, $limit: Int!, $withPullRequestBody: Boolean!, $withPullRequestURL: Boolean!, $withBaseRefName: Boolean!, $withHeadRefName: Boolean!) {
   repository(name: $name, owner: $owner) {
@@ -34755,6 +34824,77 @@ var FindRecentMergedPullRequestsDocument = new TypedDocumentString(`
   baseRefName @include(if: $withBaseRefName)
   headRefName @include(if: $withHeadRefName)
 }`);
+var HydrateComparisonCommitsWithStacksDocument = new TypedDocumentString(`
+    query hydrateComparisonCommitsWithStacks($name: String!, $owner: String!, $headRef: String!, $cursor: String, $historyLimit: Int!, $pullRequestLimit: Int!, $withPullRequestBody: Boolean!, $withPullRequestURL: Boolean!, $withBaseRefName: Boolean!, $withHeadRefName: Boolean!) {
+  repository(name: $name, owner: $owner) {
+    object(expression: $headRef) {
+      __typename
+      ... on Commit {
+        history(first: $historyLimit, after: $cursor) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            ...AdapterComparisonCommitFields
+            associatedPullRequests(first: $pullRequestLimit) {
+              nodes {
+                ...AdapterPullRequestFields
+                stack {
+                  id
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+    fragment AdapterComparisonCommitFields on Commit {
+  id
+  oid
+  committedDate
+  message
+  author {
+    name
+    user {
+      login
+    }
+  }
+  authors(first: 100) {
+    nodes {
+      name
+      user {
+        login
+      }
+    }
+  }
+}
+fragment AdapterPullRequestFields on PullRequest {
+  title
+  number
+  url @include(if: $withPullRequestURL)
+  body @include(if: $withPullRequestBody)
+  author {
+    __typename
+    login
+    url
+  }
+  baseRepository {
+    nameWithOwner
+  }
+  isCrossRepository
+  mergedAt
+  labels(first: 100) {
+    nodes {
+      name
+    }
+  }
+  merged
+  baseRefName @include(if: $withBaseRefName)
+  headRefName @include(if: $withHeadRefName)
+}`);
 var HydrateComparisonCommitsDocument = new TypedDocumentString(`
     query hydrateComparisonCommits($name: String!, $owner: String!, $headRef: String!, $cursor: String, $historyLimit: Int!, $pullRequestLimit: Int!, $withPullRequestBody: Boolean!, $withPullRequestURL: Boolean!, $withBaseRefName: Boolean!, $withHeadRefName: Boolean!) {
   repository(name: $name, owner: $owner) {
@@ -34767,24 +34907,7 @@ var HydrateComparisonCommitsDocument = new TypedDocumentString(`
             endCursor
           }
           nodes {
-            id
-            oid
-            committedDate
-            message
-            author {
-              name
-              user {
-                login
-              }
-            }
-            authors(first: 100) {
-              nodes {
-                name
-                user {
-                  login
-                }
-              }
-            }
+            ...AdapterComparisonCommitFields
             associatedPullRequests(first: $pullRequestLimit) {
               nodes {
                 ...AdapterPullRequestFields
@@ -34796,7 +34919,27 @@ var HydrateComparisonCommitsDocument = new TypedDocumentString(`
     }
   }
 }
-    fragment AdapterPullRequestFields on PullRequest {
+    fragment AdapterComparisonCommitFields on Commit {
+  id
+  oid
+  committedDate
+  message
+  author {
+    name
+    user {
+      login
+    }
+  }
+  authors(first: 100) {
+    nodes {
+      name
+      user {
+        login
+      }
+    }
+  }
+}
+fragment AdapterPullRequestFields on PullRequest {
   title
   number
   url @include(if: $withPullRequestURL)
@@ -37753,7 +37896,18 @@ var deriveEndpoints = (options) => {
 // packages/github-adapter/src/index.ts
 var RELEASE_COUNT_LIMIT = 1e3;
 var RECENT_PULL_REQUEST_LOOKBACK = 5;
+var STACK_ENTRY_PAGE_SIZE = 100;
 var DEFAULT_CONCURRENCY = 5;
+/**
+* Tells whether every GraphQL error of a failed request is about
+* `PullRequest.stack`. A server without stacked pull requests, such as GitHub
+* Enterprise Server, rejects a query that selects the field.
+*/
+var isPullRequestStackError = (error) => {
+	const errors = error?.errors;
+	return Array.isArray(errors) && errors.length > 0 && errors.every((item) => item?.extensions?.fieldName === "stack" || Array.isArray(item?.path) && item.path.includes("stack"));
+};
+var errorMessage = (error) => error instanceof Error ? error.message : String(error);
 var GitHubAdapter = class {
 	capabilities = { draftReleases: true };
 	serverUrl;
@@ -37764,6 +37918,7 @@ var GitHubAdapter = class {
 	logger;
 	changedFilesConcurrency;
 	contributorConcurrency;
+	pullRequestStacksUnsupported = false;
 	constructor(options) {
 		if (!options.token?.trim()) throw new Error("GitHub authentication token is required");
 		const endpoints = deriveEndpoints(options);
@@ -37845,6 +38000,11 @@ var GitHubAdapter = class {
 			const key = `${pullRequest.baseRepository?.nameWithOwner}#${pullRequest.number}`;
 			if (!pullRequestsByKey.has(key)) pullRequestsByKey.set(key, pullRequest);
 		}
+		const stackedPullRequests = await this.findStackedPullRequests(params, new Set(comparisonOids), pullRequestsByKey);
+		for (const pullRequest of stackedPullRequests) {
+			const key = `${repositoryName}#${pullRequest.number}`;
+			if (!pullRequestsByKey.has(key)) pullRequestsByKey.set(key, pullRequest);
+		}
 		const isBranchRef = comparison.headRef.startsWith("refs/heads/");
 		if (!(comparison.headRef.startsWith("refs/tags/") || comparison.headRef.startsWith("refs/pull/"))) {
 			const recovered = await this.findRecentPullRequests(params, new Set(comparisonOids), new Set(pullRequestsByKey.keys()), isBranchRef ? comparison.headRef.replace(/^refs\/heads\//, "") : null);
@@ -37872,18 +38032,28 @@ var GitHubAdapter = class {
 		let cursor = null;
 		let shouldContinue = true;
 		while (shouldContinue) {
-			const object = (await this.graphql(HydrateComparisonCommitsDocument.toString(), {
-				name: params.repository.name,
-				owner: params.repository.owner,
-				headRef: `${params.comparison.headRef}^{commit}`,
-				cursor,
-				historyLimit: Math.min(Math.max(1, params.historyLimit), 100),
-				pullRequestLimit: Math.min(Math.max(1, params.pullRequestLimit), 100),
-				withPullRequestBody: params.pullRequestFields.body,
-				withPullRequestURL: params.pullRequestFields.url,
-				withBaseRefName: params.pullRequestFields.baseRefName,
-				withHeadRefName: params.pullRequestFields.headRefName
-			})).repository?.object;
+			const withStacks = !this.pullRequestStacksUnsupported;
+			let data;
+			try {
+				data = await this.graphql((withStacks ? HydrateComparisonCommitsWithStacksDocument : HydrateComparisonCommitsDocument).toString(), {
+					name: params.repository.name,
+					owner: params.repository.owner,
+					headRef: `${params.comparison.headRef}^{commit}`,
+					cursor,
+					historyLimit: Math.min(Math.max(1, params.historyLimit), 100),
+					pullRequestLimit: Math.min(Math.max(1, params.pullRequestLimit), 100),
+					withPullRequestBody: params.pullRequestFields.body,
+					withPullRequestURL: params.pullRequestFields.url,
+					withBaseRefName: params.pullRequestFields.baseRefName,
+					withHeadRefName: params.pullRequestFields.headRefName
+				});
+			} catch (error) {
+				if (!withStacks || !isPullRequestStackError(error)) throw error;
+				this.pullRequestStacksUnsupported = true;
+				this.logger.info(`Stacked pull requests are not available on ${this.graphqlUrl}; continuing without them. ${errorMessage(error)}`);
+				continue;
+			}
+			const object = data.repository?.object;
 			if (object?.__typename !== "Commit" || !object.history) throw new Error(`GitHub GraphQL head ref ${params.comparison.headRef} did not resolve to a commit`);
 			for (const commit of object.history.nodes ?? []) if (commit && needed.has(commit.oid)) found.set(commit.oid, commit);
 			if (found.size === needed.size || !object.history.pageInfo.hasNextPage) {
@@ -37894,6 +38064,50 @@ var GitHubAdapter = class {
 			if (!cursor) shouldContinue = false;
 		}
 		return [...found.values()];
+	}
+	/**
+	* Merging a stack with a merge commit creates a single commit shared by
+	* every pull request in it, and GitHub associates that commit only with the
+	* bottom one. The others are reachable through the stack of the bottom pull
+	* request. The result can include pull requests that are already found.
+	*/
+	async findStackedPullRequests(params, commitOids, foundPullRequests) {
+		const { repository } = params;
+		const repositoryName = `${repository.owner}/${repository.name}`;
+		const stackMembers = /* @__PURE__ */ new Map();
+		for (const pullRequest of foundPullRequests.values()) if (pullRequest.stack && pullRequest.baseRepository?.nameWithOwner === repositoryName && !stackMembers.has(pullRequest.stack.id)) stackMembers.set(pullRequest.stack.id, pullRequest.number);
+		return (await mapConcurrent([...stackMembers.values()], DEFAULT_CONCURRENCY, async (number) => {
+			try {
+				return await this.findPullRequestStack(params, number);
+			} catch (error) {
+				this.logger.warning(`Could not read the stack of pull request #${number}. Pull requests merged with it may be missing from the release. ${errorMessage(error)}`);
+				return [];
+			}
+		})).flat().filter((pullRequest) => pullRequest.merged && pullRequest.mergeCommit?.oid && commitOids.has(pullRequest.mergeCommit.oid));
+	}
+	/** Returns the pull requests of the stack, from the bottom to the top. */
+	async findPullRequestStack(params, number) {
+		const pullRequests = [];
+		let cursor = null;
+		let hasPreviousPage = true;
+		while (hasPreviousPage) {
+			const entries = (await this.graphql(FindPullRequestStackDocument.toString(), {
+				name: params.repository.name,
+				owner: params.repository.owner,
+				number,
+				cursor,
+				limit: STACK_ENTRY_PAGE_SIZE,
+				withPullRequestBody: params.pullRequestFields.body,
+				withPullRequestURL: params.pullRequestFields.url,
+				withBaseRefName: params.pullRequestFields.baseRefName,
+				withHeadRefName: params.pullRequestFields.headRefName
+			})).repository?.pullRequest?.stack?.entries;
+			pullRequests.unshift(...(entries?.nodes ?? []).flatMap((entry) => entry?.pullRequest ? [entry.pullRequest] : []));
+			const previousCursor = entries?.pageInfo.hasPreviousPage ? entries.pageInfo.startCursor ?? null : null;
+			hasPreviousPage = previousCursor !== null && previousCursor !== cursor;
+			cursor = previousCursor;
+		}
+		return pullRequests;
 	}
 	async findRecentPullRequests(params, commitOids, foundKeys, baseRefName) {
 		const pullRequests = (await this.graphql(FindRecentMergedPullRequestsDocument.toString(), {

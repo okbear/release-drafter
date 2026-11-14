@@ -20,24 +20,7 @@ query hydrateComparisonCommits(
             endCursor
           }
           nodes {
-            id
-            oid
-            committedDate
-            message
-            author {
-              name
-              user {
-                login
-              }
-            }
-            authors(first: 100) {
-              nodes {
-                name
-                user {
-                  login
-                }
-              }
-            }
+            ...AdapterComparisonCommitFields
             associatedPullRequests(first: $pullRequestLimit) {
               nodes {
                 ...AdapterPullRequestFields

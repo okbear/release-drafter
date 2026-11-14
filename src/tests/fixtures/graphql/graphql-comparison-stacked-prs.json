@@ -1,0 +1,64 @@
+{
+  "data": {
+    "repository": {
+      "ref": {
+        "compare": {
+          "commits": {
+            "__typename": "ComparisonCommitConnection",
+            "pageInfo": {
+              "__typename": "PageInfo",
+              "hasNextPage": false,
+              "endCursor": "c0ffee1234567890c0ffee1234567890c0ffee12 1"
+            },
+            "nodes": [
+              {
+                "__typename": "Commit",
+                "id": "MDY6Q29tbWl0MTgzNzY2OTUzOmMwZmZlZTEyMzQ1Njc4OTBjMGZmZWUxMjM0NTY3ODkwYzBmZmVlMTI=",
+                "oid": "c0ffee1234567890c0ffee1234567890c0ffee12",
+                "committedDate": "2019-04-27T15:00:00Z",
+                "message": "Merge pull request #12 from TimonVS/stack-screen\n\nAdd the screen",
+                "author": {
+                  "__typename": "GitActor",
+                  "name": "Timon van Spronsen",
+                  "user": {
+                    "__typename": "User",
+                    "login": "TimonVS"
+                  }
+                },
+                "associatedPullRequests": {
+                  "nodes": [
+                    {
+                      "title": "Add the database table",
+                      "number": 10,
+                      "url": "https://github.com/toolmantim/release-drafter-test-project/pull/10",
+                      "body": "",
+                      "author": {
+                        "login": "TimonVS",
+                        "__typename": "User",
+                        "url": "https://github.com/TimonVS"
+                      },
+                      "baseRepository": {
+                        "nameWithOwner": "toolmantim/release-drafter-test-project"
+                      },
+                      "mergedAt": "2019-04-27T15:00:00Z",
+                      "isCrossRepository": false,
+                      "labels": {
+                        "nodes": []
+                      },
+                      "merged": true,
+                      "baseRefName": "master",
+                      "headRefName": "stack-table",
+                      "stack": {
+                        "id": "PRS_kwDOCvQNac4AAAAB"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

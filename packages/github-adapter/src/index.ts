@@ -14,8 +14,10 @@ import type {
 import { noopLogger } from '@release-drafter/core'
 import {
   FindPullRequestChangedFilesDocument,
+  FindPullRequestStackDocument,
   FindRecentMergedPullRequestsDocument,
   HydrateComparisonCommitsDocument,
+  HydrateComparisonCommitsWithStacksDocument,
   ResolveCommitishDocument,
   ResolvePullRequestCommitishDocument,
 } from './types/github.graphql.generated.ts'
@@ -46,7 +48,34 @@ export type { GitHubOctokit } from './utils/octokit.ts'
 
 const RELEASE_COUNT_LIMIT = 1000
 const RECENT_PULL_REQUEST_LOOKBACK = 5
+const STACK_ENTRY_PAGE_SIZE = 100
 const DEFAULT_CONCURRENCY = 5
+
+/**
+ * Tells whether every GraphQL error of a failed request is about
+ * `PullRequest.stack`. A server without stacked pull requests, such as GitHub
+ * Enterprise Server, rejects a query that selects the field.
+ */
+const isPullRequestStackError = (error: unknown): boolean => {
+  const errors = (error as { errors?: unknown } | null)?.errors
+  return (
+    Array.isArray(errors) &&
+    errors.length > 0 &&
+    errors.every(
+      (
+        item: {
+          path?: unknown
+          extensions?: { fieldName?: unknown } | null
+        } | null,
+      ) =>
+        item?.extensions?.fieldName === 'stack' ||
+        (Array.isArray(item?.path) && item.path.includes('stack')),
+    )
+  )
+}
+
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error)
 
 export class GitHubAdapter implements ForgeAdapter, PullRequestReader {
   readonly capabilities = { draftReleases: true } as const
@@ -58,6 +87,7 @@ export class GitHubAdapter implements ForgeAdapter, PullRequestReader {
   private readonly logger: Logger
   private readonly changedFilesConcurrency: number
   private readonly contributorConcurrency: number
+  private pullRequestStacksUnsupported = false
 
   constructor(options: GitHubAdapterOptions) {
     if (!options.token?.trim())
@@ -179,6 +209,16 @@ export class GitHubAdapter implements ForgeAdapter, PullRequestReader {
       }
     }
 
+    const stackedPullRequests = await this.findStackedPullRequests(
+      params,
+      new Set(comparisonOids),
+      pullRequestsByKey,
+    )
+    for (const pullRequest of stackedPullRequests) {
+      const key = `${repositoryName}#${pullRequest.number}`
+      if (!pullRequestsByKey.has(key)) pullRequestsByKey.set(key, pullRequest)
+    }
+
     const isBranchRef = comparison.headRef.startsWith('refs/heads/')
     const isUnsupportedRecentRef =
       comparison.headRef.startsWith('refs/tags/') ||
@@ -233,7 +273,8 @@ export class GitHubAdapter implements ForgeAdapter, PullRequestReader {
     let cursor: string | null = null
     let shouldContinue = true
     while (shouldContinue) {
-      const data: {
+      const withStacks = !this.pullRequestStacksUnsupported
+      let data: {
         repository?: {
           object?: {
             __typename?: string
@@ -243,18 +284,37 @@ export class GitHubAdapter implements ForgeAdapter, PullRequestReader {
             } | null
           } | null
         } | null
-      } = await this.graphql(HydrateComparisonCommitsDocument.toString(), {
-        name: params.repository.name,
-        owner: params.repository.owner,
-        headRef: `${params.comparison.headRef}^{commit}`,
-        cursor,
-        historyLimit: Math.min(Math.max(1, params.historyLimit), 100),
-        pullRequestLimit: Math.min(Math.max(1, params.pullRequestLimit), 100),
-        withPullRequestBody: params.pullRequestFields.body,
-        withPullRequestURL: params.pullRequestFields.url,
-        withBaseRefName: params.pullRequestFields.baseRefName,
-        withHeadRefName: params.pullRequestFields.headRefName,
-      })
+      }
+      try {
+        data = await this.graphql(
+          (withStacks
+            ? HydrateComparisonCommitsWithStacksDocument
+            : HydrateComparisonCommitsDocument
+          ).toString(),
+          {
+            name: params.repository.name,
+            owner: params.repository.owner,
+            headRef: `${params.comparison.headRef}^{commit}`,
+            cursor,
+            historyLimit: Math.min(Math.max(1, params.historyLimit), 100),
+            pullRequestLimit: Math.min(
+              Math.max(1, params.pullRequestLimit),
+              100,
+            ),
+            withPullRequestBody: params.pullRequestFields.body,
+            withPullRequestURL: params.pullRequestFields.url,
+            withBaseRefName: params.pullRequestFields.baseRefName,
+            withHeadRefName: params.pullRequestFields.headRefName,
+          },
+        )
+      } catch (error) {
+        if (!withStacks || !isPullRequestStackError(error)) throw error
+        this.pullRequestStacksUnsupported = true
+        this.logger.info(
+          `Stacked pull requests are not available on ${this.graphqlUrl}; continuing without them. ${errorMessage(error)}`,
+        )
+        continue
+      }
       const object = data.repository?.object
       if (object?.__typename !== 'Commit' || !object.history) {
         throw new Error(
@@ -272,6 +332,106 @@ export class GitHubAdapter implements ForgeAdapter, PullRequestReader {
       if (!cursor) shouldContinue = false
     }
     return [...found.values()]
+  }
+
+  /**
+   * Merging a stack with a merge commit creates a single commit shared by
+   * every pull request in it, and GitHub associates that commit only with the
+   * bottom one. The others are reachable through the stack of the bottom pull
+   * request. The result can include pull requests that are already found.
+   */
+  private async findStackedPullRequests(
+    params: FindChangesRequest,
+    commitOids: Set<string>,
+    foundPullRequests: Map<string, GraphPullRequest>,
+  ): Promise<GraphPullRequest[]> {
+    const { repository } = params
+    const repositoryName = `${repository.owner}/${repository.name}`
+    const stackMembers = new Map<string, number>()
+    for (const pullRequest of foundPullRequests.values()) {
+      // Stacks are loaded through a pull request number of this repository.
+      if (
+        pullRequest.stack &&
+        pullRequest.baseRepository?.nameWithOwner === repositoryName &&
+        !stackMembers.has(pullRequest.stack.id)
+      ) {
+        stackMembers.set(pullRequest.stack.id, pullRequest.number)
+      }
+    }
+    const stacks = await mapConcurrent(
+      [...stackMembers.values()],
+      DEFAULT_CONCURRENCY,
+      async (number) => {
+        try {
+          return await this.findPullRequestStack(params, number)
+        } catch (error) {
+          this.logger.warning(
+            `Could not read the stack of pull request #${number}. Pull requests merged with it may be missing from the release. ${errorMessage(error)}`,
+          )
+          return []
+        }
+      },
+    )
+    return stacks
+      .flat()
+      .filter(
+        (pullRequest) =>
+          pullRequest.merged &&
+          pullRequest.mergeCommit?.oid &&
+          commitOids.has(pullRequest.mergeCommit.oid),
+      )
+  }
+
+  /** Returns the pull requests of the stack, from the bottom to the top. */
+  private async findPullRequestStack(
+    params: FindChangesRequest,
+    number: number,
+  ): Promise<GraphPullRequest[]> {
+    const pullRequests: GraphPullRequest[] = []
+    let cursor: string | null = null
+    let hasPreviousPage = true
+    while (hasPreviousPage) {
+      const data: {
+        repository?: {
+          pullRequest?: {
+            stack?: {
+              entries?: {
+                pageInfo: {
+                  hasPreviousPage: boolean
+                  startCursor?: string | null
+                }
+                nodes?: Array<{
+                  pullRequest?: GraphPullRequest | null
+                } | null> | null
+              } | null
+            } | null
+          } | null
+        } | null
+      } = await this.graphql(FindPullRequestStackDocument.toString(), {
+        name: params.repository.name,
+        owner: params.repository.owner,
+        number,
+        cursor,
+        limit: STACK_ENTRY_PAGE_SIZE,
+        withPullRequestBody: params.pullRequestFields.body,
+        withPullRequestURL: params.pullRequestFields.url,
+        withBaseRefName: params.pullRequestFields.baseRefName,
+        withHeadRefName: params.pullRequestFields.headRefName,
+      })
+      const entries = data.repository?.pullRequest?.stack?.entries
+      pullRequests.unshift(
+        ...(entries?.nodes ?? []).flatMap((entry) =>
+          entry?.pullRequest ? [entry.pullRequest] : [],
+        ),
+      )
+      const previousCursor: string | null = entries?.pageInfo.hasPreviousPage
+        ? (entries.pageInfo.startCursor ?? null)
+        : null
+      // A cursor that does not move would repeat the same page forever.
+      hasPreviousPage = previousCursor !== null && previousCursor !== cursor
+      cursor = previousCursor
+    }
+    return pullRequests
   }
 
   private async findRecentPullRequests(
